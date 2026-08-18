@@ -71,6 +71,10 @@ services:
     depends_on: [redis, postgres]
     volumes:
       - ./services/webhook_gateway:/app
+<<<<<<< HEAD
+=======
+      - ./common:/app/common
+>>>>>>> 752ae08 (Implement Tier 4 Webhook Gateway)
 
 volumes:
   pgdata:
