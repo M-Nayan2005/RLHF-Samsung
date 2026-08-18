@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: rlhf_seg
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Dev 1 — Grounding DINO + SAM2 (5x MCD) auto-labeling
+  pre_inference:
+    build: ./services/pre_inference
+    env_file: .env
+    ports: ["8001:8001"]
+    depends_on: [postgres]
+    volumes:
+      - ./services/pre_inference:/app
+      - ./models:/app/models
+
+  # Dev 2 — Dual-metric router, honeypot injection, trust scores
+  routing_qa:
+    build: ./services/routing_qa
+    env_file: .env
+    ports: ["8002:8002"]
+    depends_on: [postgres, redis]
+    volumes:
+      - ./services/routing_qa:/app
+
+  # Dev 3 — Label Studio ML Backend (stochastic SAM2 decoder)
+  serving_ui:
+    build: ./services/serving_ui
+    env_file: .env
+    ports: ["8003:8003"]
+    depends_on: [routing_qa]
+    volumes:
+      - ./services/serving_ui:/app
+      - ./models:/app/models
+
+  label_studio:
+    image: heartexlabs/label-studio:latest
+    ports: ["8080:8080"]
+    environment:
+      LABEL_STUDIO_ML_BACKEND_V2: "true"
+    volumes:
+      - ls_data:/label-studio/data
+    depends_on: [serving_ui]
+
+  # Dev 4 — Webhook gateway + Redis ingestion + stub telemetry worker
+  webhook_gateway:
+    build: ./services/webhook_gateway
+    env_file: .env
+    ports: ["8004:8004"]
+    depends_on: [redis, postgres]
+    volumes:
+      - ./services/webhook_gateway:/app
+
+volumes:
+  pgdata:
+  ls_data:
