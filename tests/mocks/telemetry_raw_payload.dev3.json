@@ -1,0 +1,19 @@
+{
+  "task_id": "task_a1b2c3",
+  "effort_telemetry": {
+    "click_count": 17,
+    "cursor_path_length_px": 1284.6,
+    "dwell_time_ms": 6820,
+    "wiggle_seed": "c644b8cf379b545910d076f8e05d913c"
+  },
+  "annotation_id": null,
+  "project_id": "1",
+  "completed_by": "annotator_42",
+  "ls_task_id": 7,
+  "client_session_id": "sess_k3n8fq2xa1",
+  "wiggle_seed": "c644b8cf379b545910d076f8e05d913c",
+  "cursor_path_length_image_px": 1284.6,
+  "lead_time": 41.3,
+  "client_sent_at": "2026-08-18T10:16:39.412Z",
+  "transport": "beacon"
+}

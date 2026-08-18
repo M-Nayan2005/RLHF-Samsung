@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
@@ -46,22 +44,61 @@ services:
 
   # Dev 3 — Label Studio ML Backend (stochastic SAM2 decoder)
   serving_ui:
-    build: ./services/serving_ui
+    build:
+      # Repo root, NOT ./services/serving_ui: the image needs common/schemas
+      # alongside the service code. See services/serving_ui/Dockerfile.
+      context: .
+      dockerfile: services/serving_ui/Dockerfile
     env_file: .env
     ports: ["8003:8003"]
     depends_on: [routing_qa]
     volumes:
-      - ./services/serving_ui:/app
-      - ./models:/app/models
+      - ./services/serving_ui/app:/app/app
+      - ./services/serving_ui/label_studio:/app/label_studio
+      - ./common:/app/common
+      - ./tests/mocks:/app/tests/mocks
+      # Local test images only. NOT ./tests - that holds the Label Studio API
+      # token during local setup.
+      - ./tests/assets:/app/tests/assets:ro
+      # The served-wiggle store must outlive the container: it is the only
+      # persisted record of the sampled action A_t. See app/store.py.
+      - served_wiggles:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   label_studio:
     image: heartexlabs/label-studio:latest
+    # :8080 stays published so it does not break anyone else's workflow, BUT
+    # annotating via :8080 captures NO effort telemetry - the instrumentation
+    # script is injected by ls_proxy on :8081. Use :8081 for real annotation.
     ports: ["8080:8080"]
     environment:
       LABEL_STUDIO_ML_BACKEND_V2: "true"
+      LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED: "true"
+      CSRF_TRUSTED_ORIGINS: "http://localhost:8081,http://127.0.0.1:8081"
     volumes:
       - ls_data:/label-studio/data
     depends_on: [serving_ui]
+
+  # Dev 3 — injects the effort-telemetry instrumentation into Label Studio's
+  # page. Community Label Studio has no custom-JS setting, so the script tag is
+  # added by a reverse proxy. Annotate via http://localhost:8081.
+  ls_proxy:
+    image: nginx:1.27-alpine
+    ports: ["8081:8081"]
+    volumes:
+      - ./infra/nginx/label_studio_proxy.conf:/etc/nginx/templates/label_studio_proxy.conf.template:ro
+    environment:
+      NGINX_ENVSUBST_FILTER: "RLHF_"
+      RLHF_TELEMETRY_ENDPOINT: "${RLHF_TELEMETRY_ENDPOINT:-http://localhost:8003/telemetry/raw}"
+      RLHF_TELEMETRY_SCRIPT_URL: "${RLHF_TELEMETRY_SCRIPT_URL:-http://localhost:8003/static/effort_telemetry.js}"
+      RLHF_TELEMETRY_TRANSPORT: "${TELEMETRY_TRANSPORT:-beacon}"
+      RLHF_TELEMETRY_DEBUG: "${RLHF_TELEMETRY_DEBUG:-false}"
+    depends_on: [label_studio, serving_ui]
 
   # Dev 4 — Webhook gateway + Redis ingestion + stub telemetry worker
   webhook_gateway:
@@ -71,11 +108,9 @@ services:
     depends_on: [redis, postgres]
     volumes:
       - ./services/webhook_gateway:/app
-<<<<<<< HEAD
-=======
       - ./common:/app/common
->>>>>>> 752ae08 (Implement Tier 4 Webhook Gateway)
 
 volumes:
   pgdata:
   ls_data:
+  served_wiggles:

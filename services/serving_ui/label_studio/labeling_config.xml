@@ -1,0 +1,39 @@
+<!--
+  Label Studio labeling config — Tier 2 junior annotation pool.
+
+  Polygon segmentation on a single image, matching what the ML backend returns.
+
+  Three things here have to stay in sync with the service, and `ls_format.py`
+  parses this file's live copy out of Label Studio precisely so they cannot
+  drift silently:
+
+    * name="polygon"  -> region `from_name`. Overridable via LS_FROM_NAME.
+    * toName="image"  -> region `to_name`. Overridable via LS_TO_NAME.
+    * <Label value>   -> the class labels. A region carrying a label that is not
+                         declared here is DISCARDED by Label Studio with no
+                         error shown, so `resolve_label()` falls back to
+                         "object" and logs when Grounding DINO returns a class
+                         this config does not know about.
+
+  The label list below is a starting set. Extend it to whatever Grounding DINO
+  is prompted with — every text prompt Dev 1's pipeline uses should appear here,
+  or that class's information is lost at the UI boundary.
+
+  `value="$image"` reads `task.data.image`, which is what
+  `ls_format.task_data_for_ls()` writes.
+-->
+<View>
+  <Header value="Correct the proposed mask. Your corrections train the model."/>
+
+  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+
+  <PolygonLabels name="polygon" toName="image"
+                 strokeWidth="2" pointSize="small" opacity="0.35">
+    <Label value="object"  background="#3f8efc"/>
+    <Label value="car"     background="#e8552d"/>
+    <Label value="person"  background="#2fb344"/>
+    <Label value="bicycle" background="#f5a623"/>
+    <Label value="dog"     background="#9b51e0"/>
+    <Label value="cat"     background="#00b8a9"/>
+  </PolygonLabels>
+</View>

@@ -1,0 +1,23 @@
+{
+  "tasks": [
+    {
+      "id": 7,
+      "data": {
+        "image": "https://cdn.example.com/raw/img_8f3a1c.jpg",
+        "task_id": "task_a1b2c3",
+        "image_id": "img_8f3a1c",
+        "queue": "junior_queue"
+      },
+      "meta": {},
+      "project": 1
+    }
+  ],
+  "project": "1.1755512345",
+  "label_config": "<!--\n  Label Studio labeling config \u00e2\u20ac\u201d Tier 2 junior annotation pool.\n\n  Polygon segmentation on a single image, matching what the ML backend returns.\n\n  Three things here have to stay in sync with the service, and `ls_format.py`\n  parses this file's live copy out of Label Studio precisely so they cannot\n  drift silently:\n\n    * name=\"polygon\"  -> region `from_name`. Overridable via LS_FROM_NAME.\n    * toName=\"image\"  -> region `to_name`. Overridable via LS_TO_NAME.\n    * <Label value>   -> the class labels. A region carrying a label that is not\n                         declared here is DISCARDED by Label Studio with no\n                         error shown, so `resolve_label()` falls back to\n                         \"object\" and logs when Grounding DINO returns a class\n                         this config does not know about.\n\n  The label list below is a starting set. Extend it to whatever Grounding DINO\n  is prompted with \u00e2\u20ac\u201d every text prompt Dev 1's pipeline uses should appear here,\n  or that class's information is lost at the UI boundary.\n\n  `value=\"$image\"` reads `task.data.image`, which is what\n  `ls_format.task_data_for_ls()` writes.\n-->\n<View>\n  <Header value=\"Correct the proposed mask. Your corrections train the model.\"/>\n\n  <Image name=\"image\" value=\"$image\" zoom=\"true\" zoomControl=\"true\" rotateControl=\"false\"/>\n\n  <PolygonLabels name=\"polygon\" toName=\"image\"\n                 strokeWidth=\"2\" pointSize=\"small\" opacity=\"0.35\">\n    <Label value=\"object\"  background=\"#3f8efc\"/>\n    <Label value=\"car\"     background=\"#e8552d\"/>\n    <Label value=\"person\"  background=\"#2fb344\"/>\n    <Label value=\"bicycle\" background=\"#f5a623\"/>\n    <Label value=\"dog\"     background=\"#9b51e0\"/>\n    <Label value=\"cat\"     background=\"#00b8a9\"/>\n  </PolygonLabels>\n</View>\n",
+  "params": {
+    "login": "annotator_42",
+    "context": {
+      "user": "annotator_42"
+    }
+  }
+}
