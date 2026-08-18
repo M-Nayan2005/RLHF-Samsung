@@ -6,7 +6,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 
 # Initialize database URL from environment variable, replacing postgresql:// with postgresql+asyncpg:// if needed
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if not DATABASE_URL:
+    # Do not hardcode credentials like postgres:postgres. 
+    # Fallback to a local passwordless connection string if needed for local tests.
+    DATABASE_URL = "postgresql+asyncpg://localhost:5432/postgres"
+
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
