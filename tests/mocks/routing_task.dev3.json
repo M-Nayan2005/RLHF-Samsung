@@ -1,0 +1,48 @@
+{
+  "task_id": "task_a1b2c3",
+  "image_id": "img_8f3a1c",
+  "image_url": "http://localhost:8003/assets/test.jpg",
+  "bounding_box": {
+    "x_min": 30.0,
+    "y_min": 60.0,
+    "x_max": 330.0,
+    "y_max": 400.0,
+    "label": "cat",
+    "confidence": 0.94
+  },
+  "baseline_mask": {
+    "points": [
+      [
+        40.0,
+        90.0
+      ],
+      [
+        300.0,
+        70.0
+      ],
+      [
+        320.0,
+        380.0
+      ],
+      [
+        55.0,
+        395.0
+      ]
+    ]
+  },
+  "queue": "junior_queue",
+  "routing_metrics": {
+    "geometric_variance": 0.032,
+    "class_logit_entropy": 0.11,
+    "routed_reason": "low_entropy_low_variance"
+  },
+  "honeypot": {
+    "is_honeypot": false,
+    "ground_truth_mask": null
+  },
+  "retry_count": 0,
+  "status": "pending",
+  "assigned_to": null,
+  "created_at": "2026-08-18T10:15:05Z",
+  "updated_at": "2026-08-18T10:15:05Z"
+}

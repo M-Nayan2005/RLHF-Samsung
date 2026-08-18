@@ -1,0 +1,50 @@
+{
+  "results": [
+    {
+      "result": [
+        {
+          "id": "fbf80095a7",
+          "from_name": "polygon",
+          "to_name": "image",
+          "type": "polygonlabels",
+          "original_width": 800,
+          "original_height": 600,
+          "image_rotation": 0,
+          "value": {
+            "points": [
+              [
+                9.6097,
+                6.5475
+              ],
+              [
+                50.4175,
+                7.4234
+              ],
+              [
+                49.8701,
+                53.4282
+              ],
+              [
+                9.0623,
+                52.5523
+              ]
+            ],
+            "polygonlabels": [
+              "car"
+            ],
+            "closed": true
+          },
+          "meta": {
+            "text": [
+              "wiggle_seed=c644b8cf379b545910d076f8e05d913c",
+              "task_id=task_a1b2c3"
+            ]
+          }
+        }
+      ],
+      "score": 0.0,
+      "model_version": "serving-ui-stochastic-0.1.0|seed=c644b8cf379b545910d076f8e05d913c"
+    }
+  ],
+  "model_version": "serving-ui-stochastic-0.1.0"
+}

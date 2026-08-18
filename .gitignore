@@ -2,3 +2,24 @@
 __pycache__/
 *.pyc
 .modal/
+
+# --- added by track 3 (serving_ui) ---
+# Credentials dropped in by hand during local setup. This repo is public-facing,
+# and a Label Studio API token in tests/ would be a live leak.
+tests/link and key.txt
+tests/*key*.txt
+tests/*secret*
+**/credentials*.txt
+
+# Local .env variants (upstream already ignores plain .env)
+.env.*
+!.env.example
+
+# The served-wiggle store: real data, but per-environment and unbounded.
+# It belongs in a volume, not in git. See services/serving_ui/app/store.py.
+data/
+*.jsonl
+
+.pytest_cache/
+.venv/
+venv/

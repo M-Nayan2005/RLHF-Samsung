@@ -1,0 +1,32 @@
+# serving_ui dependencies.
+#
+# Pinned to compatible ranges rather than exact versions: the four tracks share
+# `common/schemas/`, and an exact pin here that conflicts with another service's
+# would only surface at integration time.
+#
+# Notably ABSENT: `label-studio-ml-backend`. The brief suggests it; this service
+# implements the ML Backend HTTP protocol directly on FastAPI instead. Reasoning
+# in docs/dev3-decisions.md (DD-1) — briefly, the SDK pulls in Flask alongside
+# the FastAPI the rest of the stack uses, and the wire contract it wraps is four
+# endpoints of JSON.
+
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27,<1
+
+# The frozen contracts are Pydantic v2 models. Range copied from
+# common/requirements.txt — keep the two in step.
+pydantic>=2.6,<3
+
+# Upstream calls (routing_qa), telemetry forwarding (webhook_gateway), and image
+# header probes.
+httpx>=0.27,<1
+
+# The stochastic policy. PCG64 via np.random.Generator is the pinned RNG the
+# reproducibility contract in app/wiggle.py depends on — numpy guarantees stream
+# stability for Generator across versions, which is the whole reason a seed can
+# reconstruct a served polygon.
+numpy>=1.26,<3
+
+# Tests only. Harmless in the image and keeps `docker compose run serving_ui
+# pytest` working without a second requirements file.
+pytest>=8,<9

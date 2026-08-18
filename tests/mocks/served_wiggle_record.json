@@ -1,0 +1,74 @@
+{
+  "task_id": "task_a1b2c3",
+  "image_id": "img_8f3a1c",
+  "wiggle_seed": "c644b8cf379b545910d076f8e05d913c",
+  "served_at": "2026-08-18T13:50:56.556Z",
+  "baseline_points": [
+    [
+      100.0,
+      50.0
+    ],
+    [
+      400.0,
+      50.0
+    ],
+    [
+      400.0,
+      300.0
+    ],
+    [
+      100.0,
+      300.0
+    ]
+  ],
+  "wiggled_points": [
+    [
+      76.8778,
+      39.285
+    ],
+    [
+      403.34,
+      44.5403
+    ],
+    [
+      398.9606,
+      320.5691
+    ],
+    [
+      72.4984,
+      315.3138
+    ]
+  ],
+  "wiggle_params": {
+    "seed": "c644b8cf379b545910d076f8e05d913c",
+    "sigma": 0.02,
+    "mode": "affine",
+    "scale_reference": "bbox_diagonal",
+    "length_scale": 390.51248379533274,
+    "clamped": false,
+    "algorithm_version": "wiggle-1.0.0"
+  },
+  "action": {
+    "tx_px": -12.080805750670434,
+    "ty_px": 4.9270601122947,
+    "scale": 1.0088176712887533,
+    "theta_rad": 0.017365359273907085,
+    "normal_offset_px": 16.873298885273247
+  },
+  "diagnostics": {
+    "iou_vs_baseline": 0.8326530612244898,
+    "mean_displacement_px": 20.989414556587537,
+    "max_displacement_px": 31.47776640772399,
+    "displacement_over_length_scale": 0.05374838302887155,
+    "area_ratio": 1.2018129980789838
+  },
+  "image_width": 800,
+  "image_height": 600,
+  "image_dims_source": "fixed",
+  "annotator_id": "annotator_42",
+  "ls_project_id": "1.1755512345",
+  "ls_task_id": 7,
+  "model_version": "serving-ui-stochastic-0.1.0",
+  "queue": "junior_queue",
+  "is_honeypot": false
+}
