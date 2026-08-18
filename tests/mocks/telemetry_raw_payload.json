@@ -1,0 +1,15 @@
+{
+  "task_id": "task_xyz789",
+  "annotation_id": null,
+  "client_session_id": "session_alpha123",
+  "transport": "xhr",
+  "project_id": "proj_1",
+  "completed_by": "annotator_01",
+  "lead_time": 42.5,
+  "effort_telemetry": {
+    "click_count": 8,
+    "cursor_path_length_px": 605.2,
+    "dwell_time_ms": 7800,
+    "wiggle_seed": "seed_1234"
+  }
+}
