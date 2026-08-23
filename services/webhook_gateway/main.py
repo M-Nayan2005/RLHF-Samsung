@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from fastapi import FastAPI, Header, HTTPException, Request, Depends, status
 from pydantic import ValidationError
@@ -36,10 +37,8 @@ def shutdown_event():
     if redis_client:
         redis_client.close()
 
-def verify_secret(x_label_studio_signature: str = Header(None, alias="Authorization")):
-    # Label Studio can send secrets in Authorization header or X-Label-Studio-Signature depending on config
-    # We will check if the provided secret matches our environment variable
-    if not x_label_studio_signature or x_label_studio_signature != LABEL_STUDIO_WEBHOOK_SECRET:
+def verify_secret(x_label_studio_secret: str = Header(None)):
+    if not x_label_studio_secret or x_label_studio_secret != LABEL_STUDIO_WEBHOOK_SECRET:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid or missing webhook secret"
@@ -48,14 +47,52 @@ def verify_secret(x_label_studio_signature: str = Header(None, alias="Authorizat
 @app.post("/webhooks/label-studio")
 async def label_studio_webhook(request: Request, _ = Depends(verify_secret)):
     try:
-        body = await request.json()
-    except json.JSONDecodeError:
+        body_bytes = await request.body()
+        body_str = body_bytes.decode('utf-8')
+        body = json.loads(body_str)
+    except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+
+    # Extract wiggle_seed via regex
+    wiggle_seed = None
+    match = re.search(r'seed=([a-fA-F0-9]+)', body_str)
+    if match:
+        wiggle_seed = match.group(1)
+    elif "wiggle_seed=" in body_str:
+        match2 = re.search(r'wiggle_seed=([a-fA-F0-9]+)', body_str)
+        if match2:
+            wiggle_seed = match2.group(1)
+            
+    task_id = body.get("task_id")
+
+    # Fetch buffered beacon from Redis
+    effort_telemetry = None
+    if wiggle_seed:
+        cached = redis_client.get(f"beacon:seed:{wiggle_seed}")
+        if cached:
+            effort_telemetry = json.loads(cached)
+    
+    if not effort_telemetry and task_id:
+        cached = redis_client.get(f"beacon:task:{task_id}")
+        if cached:
+            effort_telemetry = json.loads(cached)
+            
+    if not effort_telemetry:
+        logger.warning(f"No buffered beacon found for seed={wiggle_seed}, task={task_id}. Enqueuing with empty telemetry.")
+        effort_telemetry = {
+            "click_count": 0,
+            "cursor_path_length_px": 0.0,
+            "dwell_time_ms": 0,
+            "wiggle_seed": wiggle_seed
+        }
+
+    # Inject effort_telemetry into the body to satisfy the frozen schema
+    body["effort_telemetry"] = effort_telemetry
 
     try:
         payload = LSAnnotationUpdatedPayload(**body)
     except ValidationError as e:
-        logger.error(f"Schema mismatch. Raw payload: {json.dumps(body)}")
+        logger.error(f"Schema mismatch. Raw payload: {body_str}")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors())
 
     annotation_id = payload.annotation_id
@@ -81,66 +118,39 @@ async def label_studio_webhook(request: Request, _ = Depends(verify_secret)):
 
     # Push to Redis
     redis_client.lpush(REDIS_TELEMETRY_QUEUE_KEY, envelope.model_dump_json())
-    logger.info(f"Queued event {event_id} for annotation {annotation_id}")
+    logger.info(f"Queued event {event_id} for annotation {annotation_id} (joined with beacon seed={wiggle_seed})")
 
     return {"status": "ok"}
 
 @app.post("/telemetry/raw")
 async def telemetry_raw(request: Request):
     try:
-        body = await request.json()
+        body_bytes = await request.body()
+        body = json.loads(body_bytes)
     except json.JSONDecodeError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
 
-    task_id = body.get("task_id", "unknown_task")
-    client_session_id = body.get("client_session_id", "unknown_session")
-    
-    # Generate fallback ID since annotation_id is null
-    fallback_id = f"raw_{task_id}_{client_session_id}"
-    idempotency_key = f"seen:annotation_ids:{fallback_id}"
+    wiggle_seed = body.get("wiggle_seed")
+    task_id = body.get("task_id")
+    raw_telemetry = body.get("effort_telemetry")
 
-    # Idempotency check
-    is_new = redis_client.set(idempotency_key, "1", ex=IDEMPOTENCY_TTL_SECONDS, nx=True)
-    if not is_new:
-        logger.info(f"Duplicate raw telemetry dropped for fallback ID {fallback_id}")
-        return {"status": "ok", "message": "duplicate dropped"}
+    if not raw_telemetry:
+        return {"status": "ok", "message": "no telemetry to buffer"}
 
-    # Extract and validate effort_telemetry
-    raw_telemetry = body.get("effort_telemetry", {})
+    # Validate against LSTelemetryMeta
     try:
-        telemetry_meta = LSTelemetryMeta(**raw_telemetry)
+        LSTelemetryMeta(**raw_telemetry)
     except ValidationError as e:
         logger.error(f"Invalid telemetry format: {json.dumps(raw_telemetry)}")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors())
 
-    # Construct synthetic LSAnnotationUpdatedPayload
-    from common.schemas.label_studio_webhook import LSAction
-    synthetic_payload = LSAnnotationUpdatedPayload(
-        action=LSAction.ANNOTATION_UPDATED,
-        task_id=task_id,
-        annotation_id=fallback_id,
-        project_id=body.get("project_id", "unknown_project"),
-        completed_by=body.get("completed_by", "unknown_annotator"),
-        result=[],
-        effort_telemetry=telemetry_meta,
-        lead_time=body.get("lead_time", 0.0),
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat()
-    )
+    telemetry_json = json.dumps(raw_telemetry)
+    
+    # Buffer in Redis for 5 minutes (300 seconds)
+    if wiggle_seed:
+        redis_client.set(f"beacon:seed:{wiggle_seed}", telemetry_json, ex=300)
+    if task_id:
+        redis_client.set(f"beacon:task:{task_id}", telemetry_json, ex=300)
 
-    # Wrap into RedisEventEnvelope
-    event_id = str(uuid.uuid4())
-    enqueued_at = datetime.now(timezone.utc).isoformat()
-
-    envelope = RedisEventEnvelope(
-        event_id=event_id,
-        idempotency_key=fallback_id,
-        enqueued_at=enqueued_at,
-        payload=synthetic_payload
-    )
-
-    # Push to Redis
-    redis_client.lpush(REDIS_TELEMETRY_QUEUE_KEY, envelope.model_dump_json())
-    logger.info(f"Queued event {event_id} for synthetic fallback annotation {fallback_id}")
-
+    logger.info(f"Buffered beacon for seed={wiggle_seed}, task={task_id}")
     return {"status": "ok"}
