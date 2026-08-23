@@ -18,21 +18,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Routing QA Service", lifespan=lifespan)
 
 @app.get("/tasks/next")
-async def get_next_task_endpoint(queue: str, annotator_id: str):
+def get_next_task_endpoint(queue: str, annotator_id: str):
     allowed_queues = ["junior_queue", "senior_queue", "consensus_queue"]
     if queue not in allowed_queues:
         raise HTTPException(status_code=400, detail="Invalid queue")
         
     task = get_next_task(queue, annotator_id)
     if not task:
-        return {"task": None, "message": "No pending tasks available"}
+        # Return empty dictionary or 404. Dev 3 notes: "404 Treated as queue empty"
+        raise HTTPException(status_code=404, detail="No pending tasks available")
     
     # Strip ground_truth_mask for honeypots before sending to UI!
     task_dict = dict(task)
     if task_dict.get("honeypot") and task_dict["honeypot"].get("is_honeypot"):
         task_dict["honeypot"]["ground_truth_mask"] = None
         
-    return {"task": task_dict}
+    return task_dict
 
 @app.post("/tasks/{task_id}/requeue")
 async def requeue_task(task_id: str):
