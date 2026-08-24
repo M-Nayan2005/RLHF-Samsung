@@ -28,6 +28,8 @@ class WiggleCacheEntry(BaseModel):
     m_initial: PolygonMask = Field(..., description="Baseline consensus mask from Tier 1, pre-wiggle")
     m_wiggled: PolygonMask = Field(..., description="The Gaussian-perturbed mask actually shown to the annotator")
     served_at: str = Field(..., description="ISO-8601 UTC, used for TTL sanity checks")
+    model_version: str = Field(..., description="The SAM2 checkpoint version that produced m_initial")
+    label: Optional[str] = Field(None, description="[V2] The class label from Tier 1, used for diversity sampling in Tier 4")
 
 
 class SequenceCheckResult(BaseModel):
@@ -103,6 +105,7 @@ class ExperienceTuple(BaseModel):
     reward_r_t: float
 
     model_version: str = Field(..., description="Which SAM2/LoRA checkpoint produced action_a_t — required for on-policy validity checks")
+    label: Optional[str] = Field(None, description="[V2] Inherited from WiggleCacheEntry for per-batch diversity monitoring")
     created_at: str
     consumed_by_ppo: bool = Field(False, description="Flipped true + row deleted/archived once Tier 4 flushes its batch")
 
@@ -136,9 +139,10 @@ class Stage1Output(BaseModel):
     effort: NormalizedEffortScore
     dropped_as_bot: bool = Field(False, description="Mirrors effort.dropped_as_bot for convenience — Dev 2 must check this and exclude from replay_buffer")
 
-    model_version: Optional[str] = Field(
-        None, description="KNOWN GAP: only populated once WiggleCacheEntry carries a model_version field (see plan doc §5, Dev 2 note). None until that's added."
+    model_version: str = Field(
+        ..., description="Populated from WiggleCacheEntry. Required to match ExperienceTuple."
     )
+    label: Optional[str] = Field(None, description="[V2] Populated from WiggleCacheEntry for diversity monitoring")
 
 
 class RolloutBatchReadyEvent(BaseModel):

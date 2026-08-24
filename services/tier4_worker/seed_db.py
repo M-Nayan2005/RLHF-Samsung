@@ -28,8 +28,8 @@ async def seed():
         await conn.execute("""
             INSERT INTO tier3.replay_buffer 
             (tuple_id, wiggle_seed, task_id, annotation_id, state_s_t, action_a_t, reward_r_t, 
-             delta_iou, delta_e_norm, alpha, beta, model_version, created_at, consumed_by_ppo)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             delta_iou, delta_e_norm, alpha, beta, model_version, label, created_at, consumed_by_ppo)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (annotation_id) DO NOTHING
         """,
         tuple_id,
@@ -44,6 +44,7 @@ async def seed():
         1.0,                        # alpha
         0.3,                        # beta
         model_version,
+        "mock_label_car",           # label
         datetime.now(timezone.utc),
         False
         )

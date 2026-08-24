@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS tier3.replay_buffer (
     beta                 DOUBLE PRECISION NOT NULL,
 
     model_version        TEXT NOT NULL,           -- which LoRA checkpoint produced action_a_t
+    label                TEXT,                    -- [V2] class label for diversity monitoring
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     consumed_by_ppo      BOOLEAN NOT NULL DEFAULT FALSE,
