@@ -1,0 +1,19 @@
+# Tier 3 worker.
+#
+# Dev 2's half needs shapely for exact polygon boolean ops (the reward path is
+# barred from serving_ui's rasterised approximation) and asyncpg for the replay
+# buffer. Dev 1's consumer deps -- redis[hiredis] and anything their sequence
+# check needs -- merge into this file; the sections are kept apart so the two
+# additions do not collide.
+
+pydantic>=2.6,<3
+shapely>=2.0,<3
+asyncpg>=0.29,<0.32
+numpy>=1.26
+
+# -- Dev 1 (consumer half) --
+redis>=5.0,<6
+
+# -- test only --
+pytest>=8
+pytest-asyncio>=0.23
