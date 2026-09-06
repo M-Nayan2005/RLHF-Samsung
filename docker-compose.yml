@@ -153,3 +153,18 @@ volumes:
   pgdata:
   ls_data:
   served_wiggles:
+
+  tier4_worker:
+    build:
+      context: .
+      dockerfile: services/tier4_worker/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/tier4_worker:/app/tier4_worker
+      - ./common:/app/common
+      - ./models:/app/models
