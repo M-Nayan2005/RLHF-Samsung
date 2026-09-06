@@ -1,3 +1,4 @@
 asyncpg>=0.28.0
 pydantic>=2.0.0
 torch>=2.0.0
+redis>=5.0.0

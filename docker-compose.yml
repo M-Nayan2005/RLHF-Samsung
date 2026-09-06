@@ -159,6 +159,9 @@ volumes:
       context: .
       dockerfile: services/tier4_worker/Dockerfile
     env_file: .env
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgresql://user:password@postgres:5432/rlhf_seg}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
     depends_on:
       postgres:
         condition: service_healthy
