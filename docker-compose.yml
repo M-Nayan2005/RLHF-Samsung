@@ -110,6 +110,45 @@ services:
       - ./services/webhook_gateway:/app
       - ./common:/app/common
 
+  # Tier 3 — reward pipeline. Dev 1 owns the Redis consumer half, Dev 2 the
+  # reward half (`stage2.process_stage1`).
+  #
+  # Behind a profile on purpose: the default CMD is Dev 1's consumer entrypoint,
+  # which does not exist yet, so an unprofiled service would crash-loop for
+  # everyone running `docker compose up`. Drop the `profiles` key once
+  # `tier3_worker/consumer.py` lands.
+  #
+  #   docker compose --profile tier3 up -d --build tier3_worker
+  #   docker compose run --rm tier3_worker python -m tier3_worker.selfcheck
+  tier3_worker:
+    profiles: ["tier3"]
+    build:
+      # Repo root, NOT ./services/tier3_worker: the image needs common/schemas
+      # and infra/sql. See services/tier3_worker/Dockerfile.
+      context: .
+      dockerfile: services/tier3_worker/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # The compose Postgres, which is not what .env.example's DATABASE_URL
+      # points at. Explicit here so the worker talks to the local stack.
+      TIER3_PG_DSN: "${TIER3_PG_DSN:-postgresql://user:password@postgres:5432/rlhf_seg}"
+      # Q11 / D10 is unresolved: reward attributes to the sampled action by
+      # default. Set to `initial` to measure against the consensus mask instead.
+      TIER3_REFERENCE_MASK: "${TIER3_REFERENCE_MASK:-wiggled}"
+      # PROVISIONAL. The source documents never assign alpha or beta — see
+      # docs/reference/equations.md. Calibrate before trusting a run.
+      TIER3_ALPHA: "${TIER3_ALPHA:-1.0}"
+      TIER3_BETA: "${TIER3_BETA:-0.3}"
+    volumes:
+      - ./services/tier3_worker:/app/tier3_worker
+      - ./common:/app/common
+      - ./infra/sql:/app/infra/sql:ro
+
 volumes:
   pgdata:
   ls_data:
