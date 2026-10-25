@@ -4,9 +4,10 @@ Use this document to persist state between agent sessions. Any agent shutting do
 
 ## Current Context (2026-10-26)
 
-The original team has dispersed and the original GitHub repo
-(`Quirrells-Quill/RLHF-Samsung`) is gone. `M-Nayan2005/RLHF-Samsung` holds the
-same `main` (f750fc8). This clone's `origin` still points at the deleted repo.
+The original GitHub repo (`Quirrells-Quill/RLHF-Samsung`) was deleted. The
+project now lives at `RayyanAzeez/RLHF-Samsung`, on `main`.
+`M-Nayan2005/RLHF-Samsung` is a stale copy from Sep 6 (f750fc8). Team plan and
+work split: `TEAM-PLAN.md`.
 
 Branch `fix/cohesive-pipeline` makes the whole loop run end to end for the
 first time. Verified in Docker with the annotator simulator: 420 annotations,
