@@ -37,6 +37,45 @@ def shutdown_event():
     if redis_client:
         redis_client.close()
 
+def flatten_ls_webhook(body: dict) -> dict:
+    """
+    Map stock Label Studio's webhook body onto the flat frozen contract.
+
+    Label Studio posts `{"action", "annotation": {...}, "task": {...}, "project": {...}}`,
+    while `LSAnnotationUpdatedPayload` is flat. Bodies that are already flat
+    (the fixtures, the simulator) pass through untouched.
+    """
+    annotation = body.get("annotation")
+    if not isinstance(annotation, dict):
+        return body
+
+    task = body.get("task") if isinstance(body.get("task"), dict) else {}
+    project = body.get("project") if isinstance(body.get("project"), dict) else {}
+    task_data = task.get("data") if isinstance(task.get("data"), dict) else {}
+
+    completed_by = annotation.get("completed_by")
+    if isinstance(completed_by, dict):
+        completed_by = completed_by.get("email") or completed_by.get("id")
+
+    # Our QueueTask.task_id rides in task.data (setup_project / serving_ui put it
+    # there); Label Studio's own integer id is only the fallback.
+    task_id = task_data.get("task_id") or task.get("id") or annotation.get("task")
+    project_id = project.get("id") or task.get("project") or annotation.get("project")
+    now = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "action": body.get("action"),
+        "task_id": str(task_id) if task_id is not None else None,
+        "annotation_id": str(annotation.get("id")) if annotation.get("id") is not None else None,
+        "project_id": str(project_id) if project_id is not None else "unknown",
+        "completed_by": str(completed_by) if completed_by is not None else "unknown",
+        "result": annotation.get("result") or [],
+        "lead_time": float(annotation.get("lead_time") or 0.0),
+        "created_at": str(annotation.get("created_at") or now),
+        "updated_at": str(annotation.get("updated_at") or annotation.get("created_at") or now),
+    }
+
+
 def verify_secret(x_label_studio_secret: str = Header(None)):
     if not x_label_studio_secret or x_label_studio_secret != LABEL_STUDIO_WEBHOOK_SECRET:
         raise HTTPException(
@@ -49,7 +88,7 @@ async def label_studio_webhook(request: Request, _ = Depends(verify_secret)):
     try:
         body_bytes = await request.body()
         body_str = body_bytes.decode('utf-8')
-        body = json.loads(body_str)
+        body = flatten_ls_webhook(json.loads(body_str))
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
 

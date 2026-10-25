@@ -29,6 +29,7 @@ either way.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import sys
@@ -43,6 +44,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from common import rl_policy
 from common.schemas.routing_queue import QueueTask
 
 from . import ls_format
@@ -62,6 +64,7 @@ from .store import ServedWiggleStore
 from .task_source import NoTaskAvailable, TaskSourceError, build_task_source
 from .telemetry import TelemetryForwarder, utc_now_iso
 from .wiggle import WIGGLE_ALGORITHM_VERSION, WiggleError, apply_wiggle, new_seed
+from .wiggle_cache import WiggleCacheWriter, build_entry
 
 log = logging.getLogger("serving_ui")
 
@@ -94,6 +97,11 @@ async def lifespan(app: FastAPI):
         settings.wiggle_mode, settings.wiggle_sigma,
         settings.wiggle_scale_reference, WIGGLE_ALGORITHM_VERSION,
     )
+    log.info(
+        "learned policy: %s; wiggle cache: %s",
+        f"on, checkpoints in {settings.models_dir}/policy" if settings.policy_enabled else "off",
+        "on" if app.state.wiggle_cache.enabled else "OFF - Tier 3 will drop every annotation",
+    )
     for warning in startup_warnings(settings):
         log.warning(warning)
 
@@ -101,6 +109,7 @@ async def lifespan(app: FastAPI):
 
     for client in (app.state.http_client, app.state.probe_client):
         client.close()
+    app.state.wiggle_cache.close()
 
 
 def create_app(settings: Optional[Settings] = None) -> FastAPI:
@@ -124,6 +133,11 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.state.task_source = build_task_source(settings, client=http_client)
     app.state.dimensions = ImageDimensionResolver(settings, client=probe_client)
     app.state.forwarder = TelemetryForwarder(settings, store, client=http_client)
+    app.state.wiggle_cache = WiggleCacheWriter(settings)
+    app.state.policy_store = (
+        rl_policy.PolicyStore(settings.models_dir, settings.model_version)
+        if settings.policy_enabled else None
+    )
 
     # The instrumentation script runs on the Label Studio origin (:8080) and posts
     # telemetry here (:8003), so the beacon is cross-origin. Without this, the
@@ -203,7 +217,7 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 - a flat route table r
         settings: Settings = app.state.settings
         return {
             "status": "UP",
-            "model_version": settings.model_version,
+            "model_version": _serving_version(app),
             "task_source": app.state.task_source.describe(),
             "store": app.state.store.stats(),
             "config": settings.redacted(),
@@ -248,7 +262,7 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 - a flat route table r
             raw.get("project"), sorted(raw), info.from_name, info.to_name,
             info.labels or "<none declared>",
         )
-        return {"model_version": settings.model_version}
+        return {"model_version": _serving_version(app)}
 
     @app.post("/predict", response_model=LSPredictResponse)
     def predict(
@@ -281,7 +295,7 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 - a flat route table r
                 )
             )
 
-        return LSPredictResponse(results=results, model_version=settings.model_version)
+        return LSPredictResponse(results=results, model_version=_serving_version(app))
 
     @app.post("/webhook")
     def ls_webhook(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, str]:
@@ -452,6 +466,29 @@ def _box_of(task: QueueTask) -> List[float]:
     return [box.x_min, box.y_min, box.x_max, box.y_max]
 
 
+def _serving_policy(app: FastAPI) -> Optional[rl_policy.PolicyParams]:
+    """
+    The checkpoint Tier 4 last published, or None when the policy is off.
+
+    A broken checkpoint degrades to the fixed wiggle rather than failing the
+    serve: the annotator still gets a mask, and the rollout carries no policy
+    action, so Tier 4 will not train on it under the wrong version.
+    """
+    store = app.state.policy_store
+    if store is None:
+        return None
+    try:
+        return store.current()
+    except (rl_policy.PolicyError, OSError, ValueError, KeyError) as exc:
+        log.error("Cannot load the serving policy from %s (%s); using the fixed wiggle.", store.root, exc)
+        return None
+
+
+def _serving_version(app: FastAPI) -> str:
+    policy = _serving_policy(app)
+    return policy.version if policy is not None else app.state.settings.model_version
+
+
 def _claim_task(app: FastAPI, queue: str, annotator_id: str) -> QueueTask:
     return app.state.task_source.next_task(queue=queue, annotator_id=annotator_id)
 
@@ -489,6 +526,25 @@ def _predict_one(
         )
         return ls_format.empty_prediction(settings)
 
+    policy = _serving_policy(app)
+    obs = mean = std = None
+    if policy is not None:
+        try:
+            obs = rl_policy.observation(
+                task.baseline_mask.points, dims.width, dims.height,
+                geometric_variance=task.routing_metrics.geometric_variance,
+                class_logit_entropy=task.routing_metrics.class_logit_entropy,
+            )
+            mean, std = policy.mean(obs).tolist(), policy.std().tolist()
+        except rl_policy.PolicyError as exc:
+            log.error("Policy cannot observe task %s (%s); serving the fixed wiggle.", task.task_id, exc)
+            policy = obs = mean = std = None
+
+    # Label Studio's prediction.model_version comes from settings, and so does
+    # the cache entry Tier 4 batches on: both must name the serving checkpoint.
+    version = policy.version if policy is not None else settings.model_version
+    settings = dataclasses.replace(settings, model_version=version)
+
     try:
         result = apply_wiggle(
             task.baseline_mask.points,
@@ -500,6 +556,8 @@ def _predict_one(
             image_width=dims.width,
             image_height=dims.height,
             clamp=settings.wiggle_clamp_to_frame,
+            policy_mean=mean,
+            policy_std=std,
         )
     except WiggleError as exc:
         log.error(
@@ -511,28 +569,35 @@ def _predict_one(
 
     bundle = ls_format.build_prediction(task, result, dims, settings, info)
 
-    app.state.store.record(
-        ServedWiggleRecord(
-            task_id=task.task_id,
-            image_id=task.image_id,
-            wiggle_seed=result.params.seed,
-            served_at=utc_now_iso(),
-            baseline_points=result.baseline_points,
-            wiggled_points=result.points,
-            wiggle_params=result.params.to_dict(),
-            action=result.action,
-            diagnostics=result.diagnostics,
-            image_width=dims.width,
-            image_height=dims.height,
-            image_dims_source=dims.source,
-            annotator_id=annotator_id,
-            ls_project_id=ls_project_id,
-            ls_task_id=ls_task.id,
-            model_version=settings.model_version,
-            queue=task.queue.value,
-            is_honeypot=task.honeypot.is_honeypot,
-        )
+    log_prob = None
+    if policy is not None and result.action_z is not None:
+        log_prob = policy.log_prob(obs, result.action_z)
+
+    record = ServedWiggleRecord(
+        task_id=task.task_id,
+        image_id=task.image_id,
+        wiggle_seed=result.params.seed,
+        served_at=utc_now_iso(),
+        baseline_points=result.baseline_points,
+        wiggled_points=result.points,
+        wiggle_params=result.params.to_dict(),
+        action=result.action,
+        diagnostics=result.diagnostics,
+        image_width=dims.width,
+        image_height=dims.height,
+        image_dims_source=dims.source,
+        annotator_id=annotator_id,
+        ls_project_id=ls_project_id,
+        ls_task_id=ls_task.id,
+        model_version=settings.model_version,
+        queue=task.queue.value,
+        is_honeypot=task.honeypot.is_honeypot,
+        policy_obs=obs if log_prob is not None else None,
+        action_z=result.action_z if log_prob is not None else None,
+        action_log_prob=log_prob,
     )
+    app.state.store.record(record)
+    app.state.wiggle_cache.write(build_entry(record, task.baseline_mask.points, task.bounding_box.label))
 
     log.info(
         "Served task %s to %s (seed=%s, iou_vs_baseline=%.3f, mean_shift=%.1fpx)",

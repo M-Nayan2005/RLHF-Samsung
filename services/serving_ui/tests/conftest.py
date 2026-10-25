@@ -57,9 +57,12 @@ def base_env(tmp_path, monkeypatch) -> dict:
         "TELEMETRY_FORWARD_ENABLED": "false",
         "WIGGLE_SIGMA": "0.02",
         "LOG_LEVEL": "WARNING",
+        "MODELS_DIR": str(tmp_path / "models"),
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    # No Redis in unit tests; tests that need the cache writer inject a fake.
+    monkeypatch.delenv("REDIS_URL", raising=False)
     return env
 
 

@@ -66,6 +66,15 @@ async def process_envelope(envelope: RedisEventEnvelope, redis_pool: redis.Redis
     cursor_path = payload.effort_telemetry.cursor_path_length_px
     dwell_time = payload.effort_telemetry.dwell_time_ms
 
+    # The gateway still enqueues an annotation whose beacon never arrived, with
+    # all-zero effort (docs/integration-notes.md). That is "no measurement",
+    # not "no effort": rewarding it as zero effort would teach the policy that
+    # whatever it served was free to correct. It also must not enter the
+    # population stats below.
+    if click_count == 0 and cursor_path == 0 and dwell_time == 0:
+        logger.warning(f"DROP task={payload.task_id} annotation={payload.annotation_id} reason=no_telemetry")
+        return None
+
     w1 = float(os.getenv("EDRDE_W1_CLICKS", "1.0"))
     w2 = float(os.getenv("EDRDE_W2_PATH", "0.01"))
     w3 = float(os.getenv("EDRDE_W3_DWELL", "0.001"))
@@ -125,7 +134,10 @@ async def process_envelope(envelope: RedisEventEnvelope, redis_pool: redis.Redis
         image_height=cache_entry.image_height,
         is_honeypot=cache_entry.is_honeypot,
         m_gold=cache_entry.m_gold,
-        label=cache_entry.label
+        label=cache_entry.label,
+        policy_obs=cache_entry.policy_obs,
+        action_z=cache_entry.action_z,
+        action_log_prob=cache_entry.action_log_prob,
     )
 
     return stage1

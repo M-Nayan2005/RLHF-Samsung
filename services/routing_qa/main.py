@@ -1,13 +1,30 @@
+import time
 from fastapi import FastAPI, HTTPException, Depends
 from contextlib import asynccontextmanager
 from poller import PollerThread
-from db import get_next_task, get_db_connection
+from db import get_next_task, get_db_connection, init_db
 
 poller_thread = None
+
+
+def init_db_with_retry(attempts: int = 30, delay_s: float = 2.0):
+    # Postgres can still be starting when this container comes up; without the
+    # tables every poll and every /tasks/next fails until someone seeds by hand.
+    for attempt in range(1, attempts + 1):
+        try:
+            init_db()
+            print("routing_qa tables ready")
+            return
+        except Exception as e:
+            print(f"init_db attempt {attempt}/{attempts} failed: {e}")
+            time.sleep(delay_s)
+    raise RuntimeError("routing_qa could not initialise its tables")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global poller_thread
+    init_db_with_retry()
     poller_thread = PollerThread(interval=5)
     poller_thread.start()
     yield

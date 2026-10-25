@@ -1,3 +1,18 @@
+# The full local loop:
+#
+#   routing_qa -> serving_ui -> Label Studio (:8081) -> webhook_gateway
+#     -> telemetry:ingest -> tier3_worker -> tier3.replay_buffer
+#     -> tier4_worker (PPO) -> ./models/policy -> serving_ui
+#
+#   docker compose up -d --build
+#   docker compose exec routing_qa python seed_db.py --junior --count 200
+#
+# Every service talks to the in-stack Postgres and Redis. `environment:` below
+# overrides `.env`, whose DATABASE_URL / REDIS_URL point at a hosted database
+# and at localhost - neither of which is reachable from inside a container.
+x-stack-db: &stack-db "${STACK_DATABASE_URL:-postgresql://user:password@postgres:5432/rlhf_seg}"
+x-stack-redis: &stack-redis "${STACK_REDIS_URL:-redis://redis:6379/0}"
+
 services:
   postgres:
     image: postgres:16
@@ -9,7 +24,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user"]
+      test: ["CMD-SHELL", "pg_isready -U user -d rlhf_seg"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -23,35 +38,55 @@ services:
       timeout: 3s
       retries: 5
 
-  # Dev 1 — Grounding DINO + SAM2 (5x MCD) auto-labeling
+  # Dev 1 - Grounding DINO + SAM2 (5x MCD) auto-labeling.
+  #
+  # Behind a profile: it needs a CUDA GPU and ~1 GB of weights, and ships only
+  # as a Modal app (services/pre_inference/modal_app.py) - there is no
+  # Dockerfile yet. Locally, `routing_qa/seed_db.py --junior` stands in for it
+  # by writing tier1_predictions rows directly.
   pre_inference:
+    profiles: ["tier1"]
     build: ./services/pre_inference
     env_file: .env
+    environment:
+      DATABASE_URL: *stack-db
     ports: ["8001:8001"]
     depends_on: [postgres]
     volumes:
       - ./services/pre_inference:/app
       - ./models:/app/models
 
-  # Dev 2 — Dual-metric router, honeypot injection, trust scores
+  # Dev 2 - Dual-metric router, honeypot injection, trust scores
   routing_qa:
     build: ./services/routing_qa
     env_file: .env
+    environment:
+      DATABASE_URL: *stack-db
+      REDIS_URL: *stack-redis
     ports: ["8002:8002"]
-    depends_on: [postgres, redis]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./services/routing_qa:/app
 
-  # Dev 3 — Label Studio ML Backend (stochastic SAM2 decoder)
+  # Dev 3 - Label Studio ML Backend: serves the learned wiggle policy
   serving_ui:
     build:
-      # Repo root, NOT ./services/serving_ui: the image needs common/schemas
-      # alongside the service code. See services/serving_ui/Dockerfile.
+      # Repo root, NOT ./services/serving_ui: the image needs common/ alongside
+      # the service code. See services/serving_ui/Dockerfile.
       context: .
       dockerfile: services/serving_ui/Dockerfile
     env_file: .env
+    environment:
+      # wiggle_cache:{seed} - the Tier 2 -> Tier 3 bridge.
+      REDIS_URL: *stack-redis
+      # Policy checkpoints, published by tier4_worker into the same folder.
+      MODELS_DIR: /app/models
     ports: ["8003:8003"]
-    depends_on: [routing_qa]
+    depends_on: [routing_qa, redis]
     volumes:
       - ./services/serving_ui/app:/app/app
       - ./services/serving_ui/label_studio:/app/label_studio
@@ -63,6 +98,7 @@ services:
       # The served-wiggle store must outlive the container: it is the only
       # persisted record of the sampled action A_t. See app/store.py.
       - served_wiggles:/app/data
+      - ./models:/app/models
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=4)"]
       interval: 15s
@@ -84,7 +120,7 @@ services:
       - ls_data:/label-studio/data
     depends_on: [serving_ui]
 
-  # Dev 3 — injects the effort-telemetry instrumentation into Label Studio's
+  # Dev 3 - injects the effort-telemetry instrumentation into Label Studio's
   # page. Community Label Studio has no custom-JS setting, so the script tag is
   # added by a reverse proxy. Annotate via http://localhost:8081.
   ls_proxy:
@@ -100,28 +136,26 @@ services:
       RLHF_TELEMETRY_DEBUG: "${RLHF_TELEMETRY_DEBUG:-false}"
     depends_on: [label_studio, serving_ui]
 
-  # Dev 4 — Webhook gateway + Redis ingestion + stub telemetry worker
+  # Dev 4 - Webhook gateway: joins Label Studio's webhook with the telemetry
+  # beacon and pushes one envelope per annotation onto telemetry:ingest.
   webhook_gateway:
-    build: ./services/webhook_gateway
+    build:
+      # Repo root: the Dockerfile copies common/ and services/webhook_gateway/.
+      context: .
+      dockerfile: services/webhook_gateway/Dockerfile
     env_file: .env
+    environment:
+      REDIS_URL: *stack-redis
     ports: ["8004:8004"]
-    depends_on: [redis, postgres]
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
-      - ./services/webhook_gateway:/app
+      - ./services/webhook_gateway:/app/services/webhook_gateway
       - ./common:/app/common
 
-  # Tier 3 — reward pipeline. Dev 1 owns the Redis consumer half, Dev 2 the
-  # reward half (`stage2.process_stage1`).
-  #
-  # Behind a profile on purpose: the default CMD is Dev 1's consumer entrypoint,
-  # which does not exist yet, so an unprofiled service would crash-loop for
-  # everyone running `docker compose up`. Drop the `profiles` key once
-  # `tier3_worker/consumer.py` lands.
-  #
-  #   docker compose --profile tier3 up -d --build tier3_worker
-  #   docker compose run --rm tier3_worker python -m tier3_worker.selfcheck
+  # Tier 3 - reward pipeline: telemetry:ingest -> E-DRDE -> tier3.replay_buffer.
   tier3_worker:
-    profiles: ["tier3"]
     build:
       # Repo root, NOT ./services/tier3_worker: the image needs common/schemas
       # and infra/sql. See services/tier3_worker/Dockerfile.
@@ -134,13 +168,13 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # The compose Postgres, which is not what .env.example's DATABASE_URL
-      # points at. Explicit here so the worker talks to the local stack.
-      TIER3_PG_DSN: "${TIER3_PG_DSN:-postgresql://user:password@postgres:5432/rlhf_seg}"
+      DATABASE_URL: *stack-db
+      TIER3_PG_DSN: *stack-db
+      REDIS_URL: *stack-redis
       # Q11 / D10 is unresolved: reward attributes to the sampled action by
       # default. Set to `initial` to measure against the consensus mask instead.
       TIER3_REFERENCE_MASK: "${TIER3_REFERENCE_MASK:-wiggled}"
-      # PROVISIONAL. The source documents never assign alpha or beta — see
+      # PROVISIONAL. The source documents never assign alpha or beta - see
       # docs/reference/equations.md. Calibrate before trusting a run.
       TIER3_ALPHA: "${TIER3_ALPHA:-1.0}"
       TIER3_BETA: "${TIER3_BETA:-0.3}"
@@ -149,19 +183,16 @@ services:
       - ./common:/app/common
       - ./infra/sql:/app/infra/sql:ro
 
-volumes:
-  pgdata:
-  ls_data:
-  served_wiggles:
-
+  # Tier 4 - PPO on the wiggle policy; publishes checkpoints into ./models/policy.
   tier4_worker:
     build:
       context: .
       dockerfile: services/tier4_worker/Dockerfile
     env_file: .env
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgresql://user:password@postgres:5432/rlhf_seg}"
-      REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+      DATABASE_URL: *stack-db
+      REDIS_URL: *stack-redis
+      MODELS_DIR: /app/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -170,4 +201,10 @@ volumes:
     volumes:
       - ./services/tier4_worker:/app/tier4_worker
       - ./common:/app/common
+      - ./infra/sql:/app/infra/sql:ro
       - ./models:/app/models
+
+volumes:
+  pgdata:
+  ls_data:
+  served_wiggles:

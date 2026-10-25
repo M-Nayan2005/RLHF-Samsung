@@ -23,3 +23,6 @@ data/
 .pytest_cache/
 .venv/
 venv/
+
+# Policy checkpoints written by tier4_worker (common/rl_policy.py).
+models/

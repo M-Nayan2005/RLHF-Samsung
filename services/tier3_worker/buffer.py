@@ -71,13 +71,15 @@ INSERT INTO tier3.replay_buffer (
     state_s_t, action_a_t, reward_r_t,
     delta_iou, delta_e_norm, alpha, beta,
     model_version, created_at, consumed_by_ppo,
-    label, is_honeypot
+    label, is_honeypot,
+    policy_obs, action_z, action_log_prob
 ) VALUES (
     $1::uuid, $2, $3, $4,
     $5::jsonb, $6::jsonb, $7,
     $8, $9, $10, $11,
     $12, $13::timestamptz, FALSE,
-    $14, $15
+    $14, $15,
+    $16::jsonb, $17::jsonb, $18
 )
 ON CONFLICT (annotation_id) DO NOTHING
 RETURNING tuple_id
@@ -179,6 +181,9 @@ class PostgresReplayBuffer:
                 as_timestamptz(tuple_.created_at),
                 label,
                 is_honeypot,
+                None if tuple_.policy_obs is None else json.dumps(tuple_.policy_obs),
+                None if tuple_.action_z is None else json.dumps(tuple_.action_z),
+                tuple_.action_log_prob,
             )
 
         # `RETURNING` yields no row when ON CONFLICT swallowed the insert.
@@ -224,6 +229,9 @@ class InMemoryReplayBuffer:
                 "consumed_by_ppo": False,
                 "label": label,
                 "is_honeypot": is_honeypot,
+                "policy_obs": tuple_.policy_obs,
+                "action_z": tuple_.action_z,
+                "action_log_prob": tuple_.action_log_prob,
             }
         )
         return True

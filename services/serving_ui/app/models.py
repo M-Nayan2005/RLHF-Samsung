@@ -227,6 +227,14 @@ class ServedWiggleRecord(BaseModel):
     queue: Optional[str] = None
     is_honeypot: bool = False
 
+    # What Tier 4 trains on (common/rl_policy.py): the observation the policy
+    # saw, the standardised 5-d action it sampled, and that action's
+    # log-probability under the policy that served it. None when the policy is
+    # disabled - such rollouts still get a reward but are never trained on.
+    policy_obs: Optional[List[float]] = None
+    action_z: Optional[List[float]] = None
+    action_log_prob: Optional[float] = None
+
 
 class WigglePreview(BaseModel):
     """Response of the GET /wiggle/preview debug endpoint."""
