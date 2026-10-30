@@ -150,6 +150,17 @@ class Settings:
     telemetry_transport: str
     telemetry_forward_enabled: bool
 
+    # -- Tier 3 bridge and the learned policy -----------------------------
+    # `wiggle_cache:{seed}` in Redis is how Tier 3 learns what was served
+    # (common/schemas/tier3_rlhf.py::WiggleCacheEntry). Empty REDIS_URL turns
+    # the writer off, which leaves Tier 3 with nothing to reward.
+    redis_url: str
+    wiggle_cache_ttl_s: int
+    # Where Tier 4 publishes policy checkpoints (common/rl_policy.py). With
+    # POLICY_ENABLED=false the decoder falls back to the fixed N(0, I) wiggle.
+    models_dir: str
+    policy_enabled: bool
+
     @property
     def prediction_model_version(self) -> str:
         """What Label Studio records as `prediction.model_version`."""
@@ -189,7 +200,7 @@ def load_settings() -> Settings:
 
         annotator_id_header=_get("ANNOTATOR_ID_HEADER", "X-Annotator-Id"),
         default_annotator_id=_get("DEFAULT_ANNOTATOR_ID", "annotator_unknown"),
-        junior_queue_name=_get("JUNIOR_QUEUE_NAME", "junior"),
+        junior_queue_name=_get("JUNIOR_QUEUE_NAME", "junior_queue"),
 
         wiggle_sigma=_get_float("WIGGLE_SIGMA", 0.02),
         wiggle_mode=_get_choice("WIGGLE_MODE", "affine", WIGGLE_MODES),
@@ -223,6 +234,11 @@ def load_settings() -> Settings:
 
         telemetry_transport=_get_choice("TELEMETRY_TRANSPORT", "beacon", TELEMETRY_TRANSPORTS),
         telemetry_forward_enabled=_get_bool("TELEMETRY_FORWARD_ENABLED", True),
+
+        redis_url=_get("REDIS_URL", ""),
+        wiggle_cache_ttl_s=_get_int("WIGGLE_CACHE_TTL_S", 86400),
+        models_dir=_get("MODELS_DIR", "/app/models"),
+        policy_enabled=_get_bool("POLICY_ENABLED", True),
     )
 
     _validate(settings)
@@ -238,6 +254,10 @@ def _validate(s: Settings) -> None:
         )
     if s.default_image_width <= 0 or s.default_image_height <= 0:
         raise ValueError("DEFAULT_IMAGE_WIDTH and DEFAULT_IMAGE_HEIGHT must both be positive")
+    if s.wiggle_cache_ttl_s <= 0:
+        raise ValueError(f"WIGGLE_CACHE_TTL_S must be positive, got {s.wiggle_cache_ttl_s}")
+    if s.policy_enabled and s.wiggle_mode != "affine":
+        raise ValueError("POLICY_ENABLED=true needs WIGGLE_MODE=affine; the policy acts on the 5-d affine action")
 
 
 def startup_warnings(s: Settings) -> List[str]:
@@ -254,6 +274,16 @@ def startup_warnings(s: Settings) -> List[str]:
             "WIGGLE_SIGMA=0 disables the stochastic policy entirely. The decoder "
             "becomes deterministic, every served mask equals the baseline, and the "
             "rollouts carry no exploration variance (Fault 3). Debug-only setting."
+        )
+    if not s.redis_url:
+        warnings.append(
+            "REDIS_URL is unset, so no wiggle_cache entry is written. Tier 3 drops "
+            "every annotation it cannot join to a cache entry: no rewards, no training."
+        )
+    if not s.policy_enabled:
+        warnings.append(
+            "POLICY_ENABLED=false: serving the fixed N(0, I) wiggle. Tier 4 only trains "
+            "on rollouts that record the policy's action, so the loop is open."
         )
     if s.mock_mode:
         warnings.append(

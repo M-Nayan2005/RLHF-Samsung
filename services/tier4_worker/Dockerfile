@@ -1,21 +1,24 @@
+# tier4_worker - PPO trainer for the wiggle policy.
+#
+# Build context is the REPO ROOT (see docker-compose.yml): the image needs
+# common/ (rl_policy + schemas) and infra/sql alongside the service code.
 FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Install system dependencies if any
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# CPU-only torch: the policy is tiny, and the default wheel drags in CUDA.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-# Install requirements
-COPY services/tier4_worker/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/tier4_worker/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy common schemas
-COPY common/ /app/common/
-
-# Copy tier4 worker code
-COPY services/tier4_worker/ /app/tier4_worker/
+COPY common /app/common
+COPY infra/sql /app/infra/sql
+COPY services/tier4_worker /app/tier4_worker
 
 ENV PYTHONPATH=/app
 

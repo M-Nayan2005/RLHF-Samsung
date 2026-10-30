@@ -53,4 +53,7 @@ def build_experience_tuple(stage1: Stage1Output, reward: EDRDEReward) -> Experie
         model_version=stage1.model_version,
         created_at=utc_now_iso(),
         consumed_by_ppo=False,
+        policy_obs=stage1.policy_obs,
+        action_z=stage1.action_z,
+        action_log_prob=stage1.action_log_prob,
     )

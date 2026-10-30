@@ -1,76 +1,63 @@
-import logging
-import uuid
-import re
-import os
+"""
+Publish a trained policy so the next served task uses it.
+
+Serving (`services/serving_ui`) reads `<models_dir>/policy/current.json` on
+every request, so publishing is: write the new checkpoint, then atomically
+flip the pointer. That is the blue/green switch - the old checkpoint stays on
+disk, untouched, and rolling back is pointing `current.json` at it again.
+
+A Redis message on `policy_updates` is also sent, for anything that wants to
+react to a deploy; nothing depends on it being received.
+"""
 import json
-import redis
+import logging
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import torch
+
+from common import rl_policy
 
 logger = logging.getLogger(__name__)
 
-class BlueGreenDeployer:
-    """
-    Handles packaging the updated LoRA weights, saving them to the shared volume,
-    and hot-swapping the inference containers via a Redis Pub/Sub signal.
-    """
-    
-    def __init__(self, models_dir: str = "/app/models", redis_url: str = "redis://localhost:6379/0"):
-        self.models_dir = models_dir
-        self.deployment_target = "green"  
-        
-        # Connect to Redis
-        try:
-            self.redis_client = redis.Redis.from_url(redis_url)
-        except Exception as e:
-            logger.warning(f"Could not connect to Redis at {redis_url}: {e}")
-            self.redis_client = None
-            
-        if not os.path.exists(self.models_dir):
-            os.makedirs(self.models_dir, exist_ok=True)
-            logger.info(f"Created models directory at {self.models_dir}")
-    
-    def deploy_weights(self, old_version: str) -> str:
-        """
-        Saves the new LoRA weights to the shared volume and signals Tier 1.
-        """
-        match = re.search(r'(.*?)-(\d+\.\d+\.)(\d+)', old_version)
-        if match:
-            prefix = match.group(1)
-            major_minor = match.group(2)
-            patch = int(match.group(3))
-            new_version = f"{prefix}-{major_minor}{patch + 1}"
-        else:
-            new_version = f"{old_version}-rev-{uuid.uuid4().hex[:4]}"
-            
-        logger.info(f"Packaging new LoRA weights (.safetensors) for {new_version}...")
-        
-        # Save weights to the shared volume
-        weight_path = os.path.join(self.models_dir, f"{new_version}_lora.safetensors")
-        try:
-            with open(weight_path, "w") as f:
-                f.write("mock_safetensors_content_with_updated_lora_weights")
-            logger.info(f"Saved new weights to {weight_path}")
-        except Exception as e:
-            logger.error(f"Failed to write weights to {weight_path}: {e}")
-        
-        # Signal Tier 1 via Redis Pub/Sub to seamlessly reload weights
-        payload = {
-            "action": "RELOAD_LORA_WEIGHTS",
-            "model_version": new_version,
-            "weight_path": weight_path,
-            "target_container": self.deployment_target
-        }
-        
-        if self.redis_client:
+UPDATES_CHANNEL = "policy_updates"
+
+
+class PolicyPublisher:
+    def __init__(self, models_dir: str, default_version: str, redis_url: Optional[str] = None):
+        self.store = rl_policy.PolicyStore(models_dir, default_version)
+        self._redis = None
+        if redis_url:
             try:
-                self.redis_client.publish("tier1_model_updates", json.dumps(payload))
-                logger.info(f"Published Redis signal to 'tier1_model_updates': {payload}")
-            except Exception as e:
-                logger.error(f"Failed to publish to Redis: {e}")
-        else:
-            logger.warning("Redis client not initialized; skipping Pub/Sub signal")
-        
-        # Toggle target for next time
-        self.deployment_target = "blue" if self.deployment_target == "green" else "green"
-        
-        logger.info(f"Deployment complete. New serving version is {new_version}")
-        return new_version
+                import redis
+
+                self._redis = redis.Redis.from_url(redis_url, socket_timeout=2.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("No Redis for deploy notifications (%s); publishing to disk only", exc)
+
+    def critic_path(self, version: str) -> Path:
+        return self.store.path_for(version).with_suffix(".critic.pt")
+
+    def load_critic(self, version: str) -> Optional[Dict[str, Any]]:
+        path = self.critic_path(version)
+        if not path.exists():
+            return None
+        return torch.load(path, map_location="cpu", weights_only=True)
+
+    def publish(self, params: rl_policy.PolicyParams, critic_state: Dict[str, Any]) -> Path:
+        # Critic first: once the pointer flips, the next training run looks for it.
+        torch.save(critic_state, self.critic_path(params.version))
+        path = self.store.save(params, make_current=True)
+        logger.info("Published policy %s (parent %s) -> %s", params.version, params.parent_version, path)
+
+        if self._redis is not None:
+            try:
+                self._redis.publish(UPDATES_CHANNEL, json.dumps({
+                    "action": "POLICY_PUBLISHED",
+                    "model_version": params.version,
+                    "parent_version": params.parent_version,
+                    "path": str(path),
+                }))
+            except Exception as exc:  # noqa: BLE001 - the pointer file is the source of truth
+                logger.warning("Could not publish the deploy notification: %s", exc)
+        return path

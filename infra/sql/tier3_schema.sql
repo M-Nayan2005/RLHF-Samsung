@@ -92,6 +92,13 @@ ALTER TABLE tier3.replay_buffer ADD COLUMN IF NOT EXISTS label TEXT;
 -- two-term form rather than the production fallback. Tier 4 needs to be able
 -- to tell them apart before mixing them in one batch (open question Q6).
 ALTER TABLE tier3.replay_buffer ADD COLUMN IF NOT EXISTS is_honeypot BOOLEAN NOT NULL DEFAULT FALSE;
+-- The learned wiggle policy (docs/tier4-policy.md). PPO needs the observation,
+-- the standardised action and its log-prob under the serving checkpoint; the
+-- polygons alone do not determine the log-prob. NULL on rows served without a
+-- policy - those are rewarded but Tier 4 never trains on them.
+ALTER TABLE tier3.replay_buffer ADD COLUMN IF NOT EXISTS policy_obs JSONB;
+ALTER TABLE tier3.replay_buffer ADD COLUMN IF NOT EXISTS action_z JSONB;
+ALTER TABLE tier3.replay_buffer ADD COLUMN IF NOT EXISTS action_log_prob DOUBLE PRECISION;
 
 -- Tier 4: record of every PPO training run, for audit + rollback.
 CREATE TABLE IF NOT EXISTS tier3.ppo_training_runs (

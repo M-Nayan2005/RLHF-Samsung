@@ -125,6 +125,12 @@ class WiggleParams:
     length_scale: float
     clamped: bool
     algorithm_version: str = WIGGLE_ALGORITHM_VERSION
+    # The learned policy's mean and std over the standardised affine draw.
+    # None means the identity policy (mean 0, std 1), which is the original
+    # wiggle-1.0.0 behaviour, so records written before the policy existed
+    # still replay unchanged.
+    policy_mean: Optional[List[float]] = None
+    policy_std: Optional[List[float]] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -137,6 +143,9 @@ class WiggleResult:
     params: WiggleParams
     action: Dict[str, float]
     diagnostics: Dict[str, float]
+    # The standardised 5-d draw `z` the policy produced (affine mode only). This
+    # is the action Tier 4 trains on; `action` above is the same thing in pixels.
+    action_z: Optional[List[float]] = None
 
     def to_dict(self) -> Dict:
         return {
@@ -145,6 +154,7 @@ class WiggleResult:
             "params": self.params.to_dict(),
             "action": self.action,
             "diagnostics": self.diagnostics,
+            "action_z": self.action_z,
         }
 
 
@@ -200,15 +210,23 @@ def apply_wiggle(
     image_width: Optional[float] = None,
     image_height: Optional[float] = None,
     clamp: bool = True,
+    policy_mean: Optional[Sequence[float]] = None,
+    policy_std: Optional[Sequence[float]] = None,
 ) -> WiggleResult:
     """
     Sample one action from the policy and apply it to the baseline mask.
 
     `baseline_points` is `QueueTask.baseline_mask.points` - absolute pixels, the
     distribution mean `mu`. The returned polygon is the sampled action `A_t`.
+
+    `policy_mean` / `policy_std` are the learned policy's output for this state
+    (`common/rl_policy.py`). They reshape the seeded standard-normal draw as
+    `z = mean + std * eps`; omitted, they default to the identity and the
+    result is bit-identical to the pre-policy wiggle. Affine mode only.
     """
     if sigma < 0:
         raise WiggleError(f"sigma must be >= 0, got {sigma}")
+    mean_vec, std_vec = _policy_vectors(policy_mean, policy_std)
 
     try:
         arr = geometry.as_array(baseline_points)
@@ -231,9 +249,13 @@ def apply_wiggle(
     length_scale = resolve_length_scale(canonical, scale_reference, bounding_box)
     rng = rng_from_seed(seed)
 
+    action_z: Optional[List[float]] = None
     if mode == "affine":
-        wiggled, action = _affine_wiggle(canonical, rng, sigma, length_scale)
+        wiggled, action, z = _affine_wiggle(canonical, rng, sigma, length_scale, mean_vec, std_vec)
+        action_z = [float(v) for v in z]
     elif mode == "vertex":
+        if mean_vec is not None or std_vec is not None:
+            raise WiggleError("a learned policy only applies to affine mode; set WIGGLE_MODE=affine")
         wiggled, action = _vertex_wiggle(canonical, rng, sigma, length_scale)
     else:
         raise WiggleError(f"unknown wiggle mode {mode!r}")
@@ -251,6 +273,8 @@ def apply_wiggle(
         scale_reference=scale_reference,
         length_scale=length_scale,
         clamped=clamped,
+        policy_mean=None if mean_vec is None else [float(v) for v in mean_vec],
+        policy_std=None if std_vec is None else [float(v) for v in std_vec],
     )
 
     return WiggleResult(
@@ -259,10 +283,29 @@ def apply_wiggle(
         params=params,
         action=action,
         diagnostics=_diagnostics(canonical, wiggled, length_scale),
+        action_z=action_z,
     )
 
 
-def _affine_wiggle(canonical, rng, sigma, length_scale):
+def _policy_vectors(policy_mean, policy_std):
+    """Validate the policy's mean/std; return None for each one that is the identity."""
+    mean_vec = std_vec = None
+    if policy_mean is not None:
+        mean_vec = np.asarray(policy_mean, dtype=np.float64)
+        if mean_vec.shape != (5,) or not np.all(np.isfinite(mean_vec)):
+            raise WiggleError(f"policy_mean must be 5 finite numbers, got {policy_mean!r}")
+        if not np.any(mean_vec):
+            mean_vec = None
+    if policy_std is not None:
+        std_vec = np.asarray(policy_std, dtype=np.float64)
+        if std_vec.shape != (5,) or not np.all(np.isfinite(std_vec)) or np.any(std_vec <= 0):
+            raise WiggleError(f"policy_std must be 5 positive numbers, got {policy_std!r}")
+        if np.all(std_vec == 1.0):
+            std_vec = None
+    return mean_vec, std_vec
+
+
+def _affine_wiggle(canonical, rng, sigma, length_scale, mean_vec=None, std_vec=None):
     """
     5-dimensional action, shared across the whole polygon.
 
@@ -274,7 +317,9 @@ def _affine_wiggle(canonical, rng, sigma, length_scale):
         4 normal_offset  uniform push along the outward boundary normal
 
     All five are drawn in a single `standard_normal(5)` call so the draw order is
-    a property of the array, not of the statement order below.
+    a property of the array, not of the statement order below. The learned
+    policy then reshapes that draw, `z = mean + std * eps`, so the seed still
+    pins `eps` and the policy params pin the rest.
 
     Scale is exponentiated (`exp(sigma * z)`) rather than added, so the
     perturbation is symmetric in log space: a shrink and the matching growth are
@@ -289,6 +334,10 @@ def _affine_wiggle(canonical, rng, sigma, length_scale):
     See DD-3 in `docs/dev3-decisions.md`.
     """
     z = rng.standard_normal(5)
+    if std_vec is not None:
+        z = z * std_vec
+    if mean_vec is not None:
+        z = z + mean_vec
     tx, ty, log_scale, theta, normal_offset = (float(v) for v in z)
 
     dx = tx * sigma * length_scale
@@ -314,7 +363,7 @@ def _affine_wiggle(canonical, rng, sigma, length_scale):
         "theta_rad": angle,
         "normal_offset_px": offset,
     }
-    return out, action
+    return out, action, z
 
 
 def _vertex_wiggle(canonical, rng, sigma, length_scale):
@@ -390,5 +439,7 @@ def replay(baseline_points: Sequence[Sequence[float]], params: WiggleParams, **k
         sigma=params.sigma,
         mode=params.mode,
         scale_reference=params.scale_reference,
+        policy_mean=params.policy_mean,
+        policy_std=params.policy_std,
         **kwargs,
     )

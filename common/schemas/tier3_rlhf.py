@@ -33,6 +33,17 @@ not a frozen-schema violation").
   6. `RolloutBatchReadyEvent.tuple_ids` uses `min_length`, not `min_items`
      (pydantic v2 spelling; `min_items` is a no-op/deprecated in v2 and this
      repo pins pydantic 2.x everywhere).
+
+ADDITIONS FOR THE LEARNED POLICY (post-team integration, see
+docs/tier4-policy.md). Optional everywhere, so every earlier producer still
+validates:
+
+  7. `policy_obs` / `action_z` / `action_log_prob` on `WiggleCacheEntry`,
+     `Stage1Output` and `ExperienceTuple`. The observation the policy saw, the
+     standardised 5-d affine action it sampled, and that action's log-prob
+     under the serving checkpoint. PPO needs all three; the polygons alone do
+     not determine the old log-prob. Tuples without them are rewarded but not
+     trained on.
 ---------------------------------------------------------------------------
 """
 from __future__ import annotations
@@ -107,6 +118,17 @@ class WiggleCacheEntry(BaseModel):
     label: Optional[str] = Field(
         None, description="Class label of the served region, for Tier 4's per-batch "
                           "diversity logging (plan §4)."
+    )
+
+    # --- Learned-policy additions (optional) ---------------------------------
+    policy_obs: Optional[List[float]] = Field(
+        None, description="Observation vector the policy conditioned on (common/rl_policy.py OBS_FEATURES)"
+    )
+    action_z: Optional[List[float]] = Field(
+        None, description="Standardised 5-d affine action sampled by the policy"
+    )
+    action_log_prob: Optional[float] = Field(
+        None, description="log pi_old(action_z | policy_obs) under the checkpoint named by model_version"
     )
 
 
@@ -216,6 +238,17 @@ class ExperienceTuple(BaseModel):
     created_at: str
     consumed_by_ppo: bool = Field(False, description="Flipped true + row deleted/archived once Tier 4 flushes its batch")
 
+    # --- Learned-policy additions (optional) ---------------------------------
+    policy_obs: Optional[List[float]] = Field(
+        None, description="Observation vector the policy conditioned on (common/rl_policy.py OBS_FEATURES)"
+    )
+    action_z: Optional[List[float]] = Field(
+        None, description="Standardised 5-d affine action sampled by the policy"
+    )
+    action_log_prob: Optional[float] = Field(
+        None, description="log pi_old(action_z | policy_obs) under the checkpoint named by model_version"
+    )
+
 
 class Stage1Output(BaseModel):
     """
@@ -280,6 +313,17 @@ class Stage1Output(BaseModel):
     )
     label: Optional[str] = Field(
         None, description="Copied from WiggleCacheEntry.label, for Tier 4 diversity logging."
+    )
+
+    # --- Learned-policy additions (optional) ---------------------------------
+    policy_obs: Optional[List[float]] = Field(
+        None, description="Observation vector the policy conditioned on (common/rl_policy.py OBS_FEATURES)"
+    )
+    action_z: Optional[List[float]] = Field(
+        None, description="Standardised 5-d affine action sampled by the policy"
+    )
+    action_log_prob: Optional[float] = Field(
+        None, description="log pi_old(action_z | policy_obs) under the checkpoint named by model_version"
     )
 
 

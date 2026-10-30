@@ -1,4 +1,9 @@
 asyncpg>=0.28.0
 pydantic>=2.0.0
-torch>=2.0.0
+numpy>=1.26,<3
 redis>=5.0.0
+# torch is installed separately in the Dockerfile from the CPU-only index: the
+# default Linux wheel bundles CUDA (~2 GB) and this policy is a few thousand
+# parameters. For a laptop: pip install torch --index-url https://download.pytorch.org/whl/cpu
+pytest>=8,<9
+pytest-asyncio>=0.23
